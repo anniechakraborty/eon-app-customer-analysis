@@ -1,11 +1,16 @@
 from google_play_scraper import Sort, reviews_all
 from deep_translator import GoogleTranslator
+from dotenv import load_dotenv
+from ollama import chat
 
 import pandas as pd
+import os
 
+load_dotenv()
 class PlayStoreReviews:
     APP_ID = 'de.ones.eon.csc'
     file = "eon_europe_reviews.csv"
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
     def get_reviews(self):
         EU_COUNTRIES = [
@@ -48,40 +53,105 @@ class PlayStoreReviews:
             try:
                 print(row['reviewId'])
                 review = row['content']
-                eon_response = row['replyContent']
                 review_translated = ''
-                response_translated = ''
                 if isinstance(review, str):
                     review = review.strip()
                     review_translated = GoogleTranslator(target='en').translate(review[:5000])
                     print(review_translated)
                     print()
-                if isinstance(eon_response, str):
-                    eon_response = eon_response.strip()
-                    response_translated = GoogleTranslator(target='en').translate(eon_response[:5000])
-                
-                return review_translated, response_translated
+                return review_translated
             except Exception as e:
                 print(f"Translation error: {e}")
-                return row['content'], row['replyContent']
+                return row['content']
 
-        df['translated_content'], df['translated_response_content'] = df.apply(translate_if_needed, axis=1)
+        df['translated_content'] = df.apply(translate_if_needed, axis=1)
         print(df.head())
         df.to_csv(self.file, index=False)
         print(f"Reviews saved to {self.file}")
         
+    def categorise_reviews(self, review):
+        few_shot_eg = """
+            Example 1:
+            Review: Fingerprint sensor still doesn't work, so you always have to provide your data, which is extremely annoying. Please fix errors! ..
+            Category: app_operational_issues
 
+            Example 2:
+            Review: Very poor . Very poor customer service . Am still waiting my yealy calculation bill . You make great mistake on my yealy calculation bill and i am still waiting the correct one . I will not advice anyone to join E.on Germany . ðŸ˜’ðŸ˜’ðŸ˜’ðŸ˜’ðŸ˜’
+            Category: billing_issues, customer_service
+
+            Example 3:
+            Review: Would be 5 stars if I could see the monthly usage. It is an essential feature. What's the point of entering the meter readings every month?
+            Category:  feature_demand
+
+            Example 4:
+            Review: Slick app and easy to navigate. Pity the call center is so inefficient and waiting time to talk to an agent is absolutely ridiculous.
+            Category: customer_service
+
+            Example 5:
+            Review: Hi to long for a little sleep
+            Category: not_related
+
+            Example 6:
+            Review: If you do not give consent to advertising, the app annoys all the time that you have open tasks in the checklist. Awful.
+            Category: app_operational_issues
+        """
+        prompt = f"""
+            You are a helpful agent that is tasked with categorizing customer reviews into the following categories:
+            ['language_feature', 'feature_demand', 'app_operational_issues', 'billing_issues', 'customer_service', 'smart_meter_operational_issues', 'positive_feedback', 'not_related', 'others']
+            You are provided with some few-shot examples below to understand the categories appropriate for the review text. Use these examples to categorize the review text into the appropriate categories.
+            Stick to the instructions mentioned below.
+
+            Few-shot examples: {few_shot_eg}
+
+            Instructions:
+            1. For every review text, return a single word as the category.
+            2. Don't need to provide an explanation.
+            3. Don't invent new categories, use the category list: ['language_feature', 'feature_demand', 'app_operational_issues', 'billing_issues', 'customer_service', 'smart_meter_operational_issues', 'positive_feedback', 'not_related', 'others']
+
+            Review: {review}
+            The response should be a single word indicating the category for the review.
+        """
+        response = chat(
+            model=self.OLLAMA_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        # print(prompt)
+        print('LLM response: ', response['message']['content'])
+        print()
+        return response['message']['content']
 
     def visualise_reviews(self):
-        
         df = pd.read_csv(self.file)
         print(df.head())
         print()
+        for i in range(100):
+            row = df.iloc[i]
+            try:
+                review = row['translated_content']
+                print()
+                print(review)
+                print()
+                category = self.categorise_reviews(review)
+                print('Category: ', category)
+            except Exception as e:
+                print(f"Category error: {e}")
+                category = 'not_related'
+        # df['category'] = df.apply(review_category, axis=1)
+        # print(df.head())
+        # df.to_csv(self.file, index=False)
+        # print(f"Reviews saved to {self.file}")
+        
 
 
 
 if __name__ == "__main__":
     ps_review = PlayStoreReviews()
     # ps_review.get_reviews()
-    ps_review.translate_reviews()
+    # ps_review.translate_reviews()
     ps_review.visualise_reviews()
